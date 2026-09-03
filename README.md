@@ -11,6 +11,18 @@ DSH 的运行时性能指标插件。它补足 CPU、内存、event loop、活�
 - `dsh.runtime.active_resources{type}`：最多 32 种资源类型
 - `dsh.telemetry.export{outcome}`：OTLP 导出质量计数器（`attempt`/`failure`/`consecutive_failure`/`log_suppressed`）；导出失败只写本地 warning，不阻塞 Agent Run
 
+> ELU（`event_loop.utilization`）的定义、与 CPU% 的区别、判读分级、与延迟分位联读、现场Remediation Playbook 见 [docs/elu-event-loop-utilization.md](docs/elu-event-loop-utilization.md)。
+
+## 指标判读文档
+
+| 文档 | 覆盖信号 | 核心内容 |
+|---|---|---|
+| [docs/elu-event-loop-utilization.md](docs/elu-event-loop-utilization.md) | `event_loop.utilization` | ELU 定义、与 CPU% 区别、饱和分级、插件自保联动、Remediation Playbook |
+| [docs/event-loop-delay.md](docs/event-loop-delay.md) | `event_loop.delay{quantile}` + `dsh_nodejs_eventloop_delay_*` | 延迟分位两实现视角、p99 判读线、与 GC/ELU 联动鉴别阻塞源 |
+| [docs/memory-gc.md](docs/memory-gc.md) | `memory{area}` + `dsh_v8js_memory_*`/`gc_*` | RSS/堆/space 分层、泄漏判型（堆内 vs 堆外）、GC 停顿与延迟代价 |
+| [docs/active-resources.md](docs/active-resources.md) | `active_resources{type}` | 句柄类型速查、泄漏判读（趋势+对账）、与 GC/内存交叉验证 |
+| [docs/telemetry-export-quality.md](docs/telemetry-export-quality.md) | `telemetry.export{outcome}` | 五态账本、故障Diagnosis Flow、断路器/节流语义、与巡检职责边界 |
+
 未设置 `endpoint` 时，插件仍可加载，但不会创建网络 exporter 或发送遥测。部署阶段以同名 Cordis patch 覆盖 endpoint；可填写 Collector 基础地址（例如 `http://localhost:4318`），插件会补全 `/v1/metrics`。
 
 ## 连续 Profiling（默认关闭）
