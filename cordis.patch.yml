@@ -1,0 +1,10 @@
+# Installed by `dsh plugin --profile <profile> add …`; do not insert this row
+# manually in a profile patch. Override the same id to set endpoint/attributes.
+- insert:
+    - id: dsh-runtime-observability
+      name: dsh-runtime-observability
+      config:
+        enabled: true
+        # endpoint is intentionally unset: code can be developed and tested
+        # without opening an export path. Set it only during deployment.
+        endpoint:

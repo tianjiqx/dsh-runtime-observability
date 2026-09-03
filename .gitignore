@@ -1,0 +1,5 @@
+node_modules/
+.codebase-memory/
+coverage/
+*.log
+.DS_Store
