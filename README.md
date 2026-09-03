@@ -12,6 +12,9 @@ DSH 的运行时性能指标插件。它补足 CPU、内存、event loop、活�
 - `process.cpu.time{cpu.mode}`、`process.uptime`：进程累计 CPU 时间与启动时长
 - `dsh.telemetry.export.*`：attempt/failure/skipped 累计量与 consecutive failure 当前值
 - `dsh.telemetry.degradation.*{reason}`：ELU 暂停/断路器的事件、累计时长和当前状态；恢复后补账
+- `dsh.workload.active{kind}`：Agent Run、LLM、Tool、MCP 的显式在途数量
+- `dsh.workload.queue.{depth,oldest_age}{kind}`：固定工作类型的排队深度与最老等待时长
+- `dsh.workload.recovery.backlog{kind}`：session、task、ledger 三类恢复积压
 - `dsh.telemetry.export{outcome}`：保留的兼容指标；新查询优先使用上述类型明确的 counter/gauge
 
 > ELU（`event_loop.utilization`）的定义、与 CPU% 的区别、判读分级、与延迟分位联读、现场Remediation Playbook 见 [docs/elu-event-loop-utilization.md](docs/elu-event-loop-utilization.md)。
@@ -24,6 +27,7 @@ DSH 的运行时性能指标插件。它补足 CPU、内存、event loop、活�
 | [docs/event-loop-delay.md](docs/event-loop-delay.md) | `event_loop.delay{quantile}` + `dsh_nodejs_eventloop_delay_*` | 延迟分位两实现视角、p99 判读线、与 GC/ELU 联动鉴别阻塞源 |
 | [docs/memory-gc.md](docs/memory-gc.md) | `memory{area}` + `dsh_v8js_memory_*`/`gc_*` | RSS/堆/space 分层、泄漏判型（堆内 vs 堆外）、GC 停顿与延迟代价 |
 | [docs/active-resources.md](docs/active-resources.md) | `active_resources{type}` | 句柄类型速查、泄漏判读（趋势+对账）、与 GC/内存交叉验证 |
+| [docs/workload-integration.md](docs/workload-integration.md) | `workload.*{kind}` | 显式生命周期接入 API、固定标签集合及当前宿主集成边界 |
 | [docs/telemetry-export-quality.md](docs/telemetry-export-quality.md) | `telemetry.export{outcome}` | 五态账本、故障Diagnosis Flow、断路器/节流语义、与巡检职责边界 |
 
 未设置 `endpoint` 时，插件仍可加载，但不会创建网络 exporter 或发送遥测。部署阶段以同名 Cordis patch 覆盖 endpoint；可填写 Collector 基础地址（例如 `http://localhost:4318`），插件会补全 `/v1/metrics`。

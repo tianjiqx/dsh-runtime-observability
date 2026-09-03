@@ -1,4 +1,33 @@
 import { Context } from "@deepseek-ai/cordis";
+//#region src/workload.d.ts
+declare const ACTIVE_WORKLOAD_KINDS: readonly ["agent_run", "llm", "tool", "mcp"];
+declare const QUEUE_WORKLOAD_KINDS: readonly ["agent_run", "llm", "tool", "mcp"];
+declare const RECOVERY_WORKLOAD_KINDS: readonly ["session", "task", "ledger"];
+type ActiveWorkloadKind = typeof ACTIVE_WORKLOAD_KINDS[number];
+type QueueWorkloadKind = typeof QUEUE_WORKLOAD_KINDS[number];
+type RecoveryWorkloadKind = typeof RECOVERY_WORKLOAD_KINDS[number];
+interface WorkloadSnapshot {
+  active: Readonly<Record<ActiveWorkloadKind, number>>;
+  queueDepth: Readonly<Record<QueueWorkloadKind, number>>;
+  queueOldestAgeSeconds: Readonly<Record<QueueWorkloadKind, number>>;
+  recoveryBacklog: Readonly<Record<RecoveryWorkloadKind, number>>;
+}
+/**
+ * Process-local, low-cardinality workload state. Integrations call this facade
+ * only at real lifecycle boundaries; it never infers work from Promise or
+ * active-handle counts.
+ */
+declare class WorkloadMetrics {
+  private readonly active;
+  private readonly queueDepth;
+  private readonly queueOldestAgeSeconds;
+  private readonly recoveryBacklog;
+  begin(kind: ActiveWorkloadKind): () => void;
+  setQueue(kind: QueueWorkloadKind, depth: number, oldestAgeSeconds?: number): void;
+  setRecoveryBacklog(kind: RecoveryWorkloadKind, count: number): void;
+  snapshot(): WorkloadSnapshot;
+}
+//#endregion
 //#region src/types.d.ts
 interface Config {
   enabled?: boolean;
@@ -57,6 +86,7 @@ interface TelemetryQualitySnapshot {
 //#endregion
 //#region src/index.d.ts
 declare class RuntimeObservability {
+  readonly workload: WorkloadMetrics;
   private readonly quality;
   private readonly snapshot;
   private readonly provider;
@@ -82,4 +112,4 @@ declare class RuntimeObservability {
 declare function apply(ctx: Context, config?: Config): RuntimeObservability;
 declare function normalizeMetricsEndpoint(endpoint: string): string;
 //#endregion
-export { RuntimeObservability, apply, normalizeMetricsEndpoint };
+export { type ActiveWorkloadKind, type QueueWorkloadKind, type RecoveryWorkloadKind, RuntimeObservability, WorkloadMetrics, type WorkloadSnapshot, apply, normalizeMetricsEndpoint };

@@ -7,7 +7,16 @@ import { RuntimeSnapshotCollector } from './runtime-snapshot.ts'
 import { TelemetryQuality } from './quality.ts'
 import { CountingMetricExporter } from './counting-exporter.ts'
 import { ProfilingController } from './profiling.ts'
+import {
+  ACTIVE_WORKLOAD_KINDS,
+  QUEUE_WORKLOAD_KINDS,
+  RECOVERY_WORKLOAD_KINDS,
+  WorkloadMetrics,
+} from './workload.ts'
 import type { Config, TelemetryQualitySnapshot } from './types.ts'
+
+export { WorkloadMetrics } from './workload.ts'
+export type { ActiveWorkloadKind, QueueWorkloadKind, RecoveryWorkloadKind, WorkloadSnapshot } from './workload.ts'
 
 const STATE = Symbol.for('dsh.runtime.observability.state')
 const SCOPE = 'dsh-runtime-observability'
@@ -22,6 +31,7 @@ type RuntimeState = {
 const processState = globalThis as typeof globalThis & { [key: symbol]: RuntimeState | undefined }
 
 export class RuntimeObservability {
+  readonly workload = new WorkloadMetrics()
   private readonly quality = new TelemetryQuality()
   private readonly snapshot = new RuntimeSnapshotCollector()
   private readonly provider: MeterProvider | undefined
@@ -149,6 +159,18 @@ export class RuntimeObservability {
     const degraded = meter.createObservableGauge('dsh.telemetry.degraded', {
       description: 'Whether telemetry is currently degraded.', unit: '1',
     })
+    const workloadActive = meter.createObservableGauge('dsh.workload.active', {
+      description: 'Currently active workload operations by fixed kind.', unit: '{operation}',
+    })
+    const workloadQueueDepth = meter.createObservableGauge('dsh.workload.queue.depth', {
+      description: 'Queued workload operations by fixed kind.', unit: '{operation}',
+    })
+    const workloadQueueOldestAge = meter.createObservableGauge('dsh.workload.queue.oldest_age', {
+      description: 'Age of the oldest queued workload operation.', unit: 's',
+    })
+    const workloadRecoveryBacklog = meter.createObservableGauge('dsh.workload.recovery.backlog', {
+      description: 'Pending recovery work by fixed kind.', unit: '{item}',
+    })
     meter.addBatchObservableCallback((result) => {
       const values = this.snapshot.collect()
       result.observe(runtime, values.eventLoopDelayP50Seconds, { quantile: '0.5' })
@@ -184,10 +206,20 @@ export class RuntimeObservability {
         result.observe(degradationDuration, quality.degradationDurationSeconds[reason], { reason })
         result.observe(degraded, quality.degradationActive[reason] ? 1 : 0, { reason })
       }
+      const workload = this.workload.snapshot()
+      for (const kind of ACTIVE_WORKLOAD_KINDS) result.observe(workloadActive, workload.active[kind], { kind })
+      for (const kind of QUEUE_WORKLOAD_KINDS) {
+        result.observe(workloadQueueDepth, workload.queueDepth[kind], { kind })
+        result.observe(workloadQueueOldestAge, workload.queueOldestAgeSeconds[kind], { kind })
+      }
+      for (const kind of RECOVERY_WORKLOAD_KINDS) {
+        result.observe(workloadRecoveryBacklog, workload.recoveryBacklog[kind], { kind })
+      }
     }, [
       runtime, utilization, memory, activeResources, processCpuTime, processUptime,
       exports, exportAttempts, exportFailures, exportSkipped, logsSuppressed,
       consecutiveFailures, circuitOpen, degradationEvents, degradationDuration, degraded,
+      workloadActive, workloadQueueDepth, workloadQueueOldestAge, workloadRecoveryBacklog,
     ])
   }
 
