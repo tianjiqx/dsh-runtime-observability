@@ -56,4 +56,12 @@ describe('Cordis activation lifecycle', () => {
     await firstContext.dispose()
     await secondContext.dispose()
   })
+
+  it('does not install DSH lifecycle observers when no metrics endpoint exists', async () => {
+    const context = createContext()
+    const service = apply(context.context as never)
+    expect(service.isDisposed()).toBe(false)
+    await context.dispose()
+    expect(service.isDisposed()).toBe(true)
+  })
 })

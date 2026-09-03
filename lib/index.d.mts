@@ -28,6 +28,42 @@ declare class WorkloadMetrics {
   snapshot(): WorkloadSnapshot;
 }
 //#endregion
+//#region src/subagent-lifecycle.d.ts
+declare const SUBAGENT_ACTIVATION_STATES: readonly ["running", "waiting", "settled_pending"];
+declare const SUBAGENT_LIFECYCLE_EVENTS: readonly ["started", "disposed", "orphaned"];
+type SubagentActivationState = typeof SUBAGENT_ACTIVATION_STATES[number];
+type SubagentLifecycleEvent = typeof SUBAGENT_LIFECYCLE_EVENTS[number];
+type AgentStatus = 'idle' | 'running';
+interface SubagentLifecycleSnapshot {
+  readonly activations: Record<SubagentActivationState, number>;
+  readonly oldestAgeSeconds: Record<SubagentActivationState, number>;
+  readonly orphans: number;
+  readonly orphanOldestAgeSeconds: number;
+  readonly events: Record<SubagentLifecycleEvent, number>;
+}
+/**
+ * Process-local projection of continuable-subagent residency. It deliberately
+ * stores identities only in memory and exports fixed-label aggregates.
+ */
+declare class SubagentLifecycleMetrics {
+  private readonly clock;
+  private readonly activations;
+  private readonly disposedParents;
+  private readonly events;
+  private static readonly PARENT_TOMBSTONE_RETENTION_MS;
+  constructor(clock?: () => number);
+  activate(id: string, parentId: string, status: AgentStatus): void;
+  deactivate(id: string): void;
+  setStatus(id: string, status: AgentStatus): void;
+  acceptMessage(id: string, messageId: string): void;
+  releaseMessage(id: string, messageId: string): void;
+  markParentDisposed(parentId: string): void;
+  snapshot(): SubagentLifecycleSnapshot;
+  dispose(): void;
+  private reconcile;
+  private pruneParentTombstones;
+}
+//#endregion
 //#region src/types.d.ts
 interface Config {
   enabled?: boolean;
@@ -87,6 +123,7 @@ interface TelemetryQualitySnapshot {
 //#region src/index.d.ts
 declare class RuntimeObservability {
   readonly workload: WorkloadMetrics;
+  readonly subagents: SubagentLifecycleMetrics;
   private readonly quality;
   private readonly snapshot;
   private readonly provider;
@@ -112,4 +149,4 @@ declare class RuntimeObservability {
 declare function apply(ctx: Context, config?: Config): RuntimeObservability;
 declare function normalizeMetricsEndpoint(endpoint: string): string;
 //#endregion
-export { type ActiveWorkloadKind, type QueueWorkloadKind, type RecoveryWorkloadKind, RuntimeObservability, WorkloadMetrics, type WorkloadSnapshot, apply, normalizeMetricsEndpoint };
+export { type ActiveWorkloadKind, type QueueWorkloadKind, type RecoveryWorkloadKind, RuntimeObservability, type SubagentActivationState, type SubagentLifecycleEvent, SubagentLifecycleMetrics, type SubagentLifecycleSnapshot, WorkloadMetrics, type WorkloadSnapshot, apply, normalizeMetricsEndpoint };

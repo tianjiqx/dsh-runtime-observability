@@ -13,10 +13,18 @@ import {
   RECOVERY_WORKLOAD_KINDS,
   WorkloadMetrics,
 } from './workload.ts'
+import {
+  installSubagentLifecycleMetrics,
+  SUBAGENT_ACTIVATION_STATES,
+  SUBAGENT_LIFECYCLE_EVENTS,
+  SubagentLifecycleMetrics,
+} from './subagent-lifecycle.ts'
 import type { Config, TelemetryQualitySnapshot } from './types.ts'
 
 export { WorkloadMetrics } from './workload.ts'
 export type { ActiveWorkloadKind, QueueWorkloadKind, RecoveryWorkloadKind, WorkloadSnapshot } from './workload.ts'
+export { SubagentLifecycleMetrics } from './subagent-lifecycle.ts'
+export type { SubagentActivationState, SubagentLifecycleEvent, SubagentLifecycleSnapshot } from './subagent-lifecycle.ts'
 
 const STATE = Symbol.for('dsh.runtime.observability.state')
 const SCOPE = 'dsh-runtime-observability'
@@ -32,6 +40,7 @@ const processState = globalThis as typeof globalThis & { [key: symbol]: RuntimeS
 
 export class RuntimeObservability {
   readonly workload = new WorkloadMetrics()
+  readonly subagents = new SubagentLifecycleMetrics()
   private readonly quality = new TelemetryQuality()
   private readonly snapshot = new RuntimeSnapshotCollector()
   private readonly provider: MeterProvider | undefined
@@ -101,6 +110,7 @@ export class RuntimeObservability {
     this.disposed = true
     if (this.profilingStartTimer) clearTimeout(this.profilingStartTimer)
     this.snapshot.dispose()
+    this.subagents.dispose()
     this.runtimeInstrumentation?.disable()
     await this.profiling?.stop()
     await this.provider?.shutdown()
@@ -171,6 +181,21 @@ export class RuntimeObservability {
     const workloadRecoveryBacklog = meter.createObservableGauge('dsh.workload.recovery.backlog', {
       description: 'Pending recovery work by fixed kind.', unit: '{item}',
     })
+    const subagentActivations = meter.createObservableGauge('dsh.subagent.activations', {
+      description: 'Resident continuable subagent activations by derived lifecycle state.', unit: '{activation}',
+    })
+    const subagentActivationOldestAge = meter.createObservableGauge('dsh.subagent.activation.oldest_age', {
+      description: 'Age of the oldest resident continuable subagent activation in each state.', unit: 's',
+    })
+    const subagentOrphans = meter.createObservableGauge('dsh.subagent.orphans', {
+      description: 'Resident continuable subagent activations whose parent Agent was disposed.', unit: '{activation}',
+    })
+    const subagentOrphanOldestAge = meter.createObservableGauge('dsh.subagent.orphan.oldest_age', {
+      description: 'Age of the oldest resident orphan continuable subagent activation.', unit: 's',
+    })
+    const subagentLifecycleEvents = meter.createObservableCounter('dsh.subagent.lifecycle.events', {
+      description: 'Continuable subagent activation lifecycle observations by fixed event.', unit: '{event}',
+    })
     meter.addBatchObservableCallback((result) => {
       const values = this.snapshot.collect()
       result.observe(runtime, values.eventLoopDelayP50Seconds, { quantile: '0.5' })
@@ -215,11 +240,23 @@ export class RuntimeObservability {
       for (const kind of RECOVERY_WORKLOAD_KINDS) {
         result.observe(workloadRecoveryBacklog, workload.recoveryBacklog[kind], { kind })
       }
+      const subagents = this.subagents.snapshot()
+      for (const state of SUBAGENT_ACTIVATION_STATES) {
+        result.observe(subagentActivations, subagents.activations[state], { state })
+        result.observe(subagentActivationOldestAge, subagents.oldestAgeSeconds[state], { state })
+      }
+      result.observe(subagentOrphans, subagents.orphans)
+      result.observe(subagentOrphanOldestAge, subagents.orphanOldestAgeSeconds)
+      for (const event of SUBAGENT_LIFECYCLE_EVENTS) {
+        result.observe(subagentLifecycleEvents, subagents.events[event], { event })
+      }
     }, [
       runtime, utilization, memory, activeResources, processCpuTime, processUptime,
       exports, exportAttempts, exportFailures, exportSkipped, logsSuppressed,
       consecutiveFailures, circuitOpen, degradationEvents, degradationDuration, degraded,
       workloadActive, workloadQueueDepth, workloadQueueOldestAge, workloadRecoveryBacklog,
+      subagentActivations, subagentActivationOldestAge, subagentOrphans,
+      subagentOrphanOldestAge, subagentLifecycleEvents,
     ])
   }
 
@@ -291,7 +328,8 @@ function normalizeResilience(config: Config): NormalizedResilience {
 }
 
 export function apply(ctx: Context, config: Config = {}): RuntimeObservability {
-  const configKey = stableStringify(normalizeConfig(config))
+  const normalized = normalizeConfig(config)
+  const configKey = stableStringify(normalized)
   let state = processState[STATE]
   if (!state || state.service.isDisposed() || state.configKey !== configKey) {
     void state?.service.dispose()
@@ -304,6 +342,10 @@ export function apply(ctx: Context, config: Config = {}): RuntimeObservability {
     unprovide()
     release(state)
   }, 'dsh-runtime-observability: cleanup')
+  // Cordis owns listeners and injected setup contributions by this exact
+  // plugin fiber. Install once per overlapping HMR fiber; the tracker uses
+  // Activation reference counts so overlap cannot double-count residency.
+  if (normalized.enabled && normalized.endpoint) installSubagentLifecycleMetrics(ctx, state.service.subagents)
   return state.service
 }
 

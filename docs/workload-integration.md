@@ -25,7 +25,7 @@ runtime.workload.setRecoveryBacklog('ledger', pendingLedgers)
 
 ## 宿主集成状态
 
- 的工作区只有发布后的 DSH CLI bundle 和 profile 依赖，没有 `@deepseek-ai/dsh-agent`、`dsh-agent-loop`、`dsh-session-persistence-jsonl`、`dsh-session-projection` 的可提交源码仓库。代码图中的 `dsh-runtime` 项目也只有构建产物，无法验证稳定的 run/queue/recovery 生命周期入口。
+ 已定位 DSH 源码工作区 `dsh-core`，并确认 continuable subagent 提供稳定的公开 setup/event seam；因此 subagent 生命周期已由插件自动接入。通用 Agent Run、LLM、Tool、MCP queue/recovery facade 仍未接入宿主执行边界。
 
 因此本阶段提交 facade 和 OTLP 指标注册，但不修改 profile 内依赖、不 monkey-patch 构建产物。取得宿主源码后，应分别在以下真实边界接入，并在宿主仓库独立提交：
 
