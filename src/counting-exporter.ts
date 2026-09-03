@@ -56,10 +56,16 @@ export class CountingMetricExporter implements PushMetricExporter {
 
   isPaused(): boolean { return this.paused }
 
-  setPaused(paused: boolean): void { this.paused = paused }
+  setPaused(paused: boolean): void {
+    if (this.paused === paused) return
+    this.paused = paused
+    if (paused) this.quality.startDegradation('elu_pause')
+    else this.quality.endDegradation('elu_pause')
+  }
 
   export(metrics: ResourceMetrics, resultCallback: Parameters<PushMetricExporter['export']>[1]): void {
     if (this.paused) {
+      this.quality.recordExportSkipped('elu_pause')
       resultCallback({ code: 0 })
       return
     }
@@ -72,6 +78,7 @@ export class CountingMetricExporter implements PushMetricExporter {
         this.probing = true
         // fall through to let one export through
       } else {
+        this.quality.recordExportSkipped('circuit_open')
         // Pretend success so the SDK reader doesn't stall; the quality
         // counters still reflect the skipped attempt.
         resultCallback({ code: 0 })

@@ -1,6 +1,7 @@
 import { monitorEventLoopDelay } from 'node:perf_hooks'
 
 export const NANOS_PER_SECOND = 1_000_000_000
+export const MICROS_PER_SECOND = 1_000_000
 
 export type RuntimeSnapshot = {
   eventLoopDelayP50Seconds: number
@@ -13,6 +14,9 @@ export type RuntimeSnapshot = {
   externalBytes: number
   arrayBuffersBytes: number
   activeResources: ReadonlyMap<string, number>
+  processCpuUserSeconds: number
+  processCpuSystemSeconds: number
+  processUptimeSeconds: number
 }
 
 type EventLoopHistogram = {
@@ -50,6 +54,8 @@ export class RuntimeSnapshotCollector {
       previous === undefined ? current : performance.eventLoopUtilization(current as never, previous as never),
     private readonly memoryUsage: () => NodeJS.MemoryUsage = () => process.memoryUsage(),
     private readonly activeResources: () => string[] = () => process.getActiveResourcesInfo(),
+    private readonly cpuUsage: () => NodeJS.CpuUsage = () => process.cpuUsage(),
+    private readonly uptime: () => number = () => process.uptime(),
   ) {
     ;(this.delay as ReturnType<typeof monitorEventLoopDelay>).enable?.()
   }
@@ -59,6 +65,7 @@ export class RuntimeSnapshotCollector {
     const elu = this.calculateElu(currentElu, this.previousElu)
     this.previousElu = currentElu
     const memory = this.memoryUsage()
+    const cpu = this.cpuUsage()
     const snapshot: RuntimeSnapshot = {
       eventLoopDelayP50Seconds: nanosecondsToSeconds(this.delay.percentile(50)),
       eventLoopDelayP90Seconds: nanosecondsToSeconds(this.delay.percentile(90)),
@@ -70,6 +77,9 @@ export class RuntimeSnapshotCollector {
       externalBytes: memory.external,
       arrayBuffersBytes: memory.arrayBuffers,
       activeResources: countActiveResources(this.activeResources()),
+      processCpuUserSeconds: cpu.user / MICROS_PER_SECOND,
+      processCpuSystemSeconds: cpu.system / MICROS_PER_SECOND,
+      processUptimeSeconds: this.uptime(),
     }
     this.delay.reset()
     return snapshot

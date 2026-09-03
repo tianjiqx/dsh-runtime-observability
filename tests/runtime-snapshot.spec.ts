@@ -33,6 +33,8 @@ describe('runtime snapshot collection', () => {
       },
       () => ({ rss: 1, heapUsed: 2, heapTotal: 3, external: 4, arrayBuffers: 5 }),
       () => ['Timeout'],
+      () => ({ user: 2_500_000, system: 750_000 }),
+      () => 123.5,
     )
 
     expect(collector.collect()).toMatchObject({
@@ -40,6 +42,9 @@ describe('runtime snapshot collection', () => {
       eventLoopUtilization: 0.5,
       externalBytes: 4,
       arrayBuffersBytes: 5,
+      processCpuUserSeconds: 2.5,
+      processCpuSystemSeconds: 0.75,
+      processUptimeSeconds: 123.5,
     })
     expect(collector.collect().eventLoopUtilization).toBeCloseTo(1 / 3)
     expect(deltaInputs).toEqual([[10, -1], [30, 10]])

@@ -42,12 +42,17 @@ interface Config {
     eluPauseThreshold?: number;
   };
 }
+type TelemetryDegradationReason = 'elu_pause' | 'circuit_open';
 interface TelemetryQualitySnapshot {
   exportAttempts: number;
   exportFailures: number;
+  exportSkipped: Record<TelemetryDegradationReason, number>;
   consecutiveFailures: number;
   circuitOpen: boolean;
   logsSuppressed: number;
+  degradationEvents: Record<TelemetryDegradationReason, number>;
+  degradationDurationSeconds: Record<TelemetryDegradationReason, number>;
+  degradationActive: Record<TelemetryDegradationReason, boolean>;
 }
 //#endregion
 //#region src/index.d.ts

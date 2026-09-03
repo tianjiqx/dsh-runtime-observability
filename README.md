@@ -9,7 +9,10 @@ DSH 的运行时性能指标插件。它补足 CPU、内存、event loop、活�
 - `dsh.runtime.event_loop.delay{quantile}`（秒）与 `dsh.runtime.event_loop.utilization`
 - `dsh.runtime.memory{area}`：RSS、heap、external、array buffers
 - `dsh.runtime.active_resources{type}`：最多 32 种资源类型
-- `dsh.telemetry.export{outcome}`：OTLP 导出质量计数器（`attempt`/`failure`/`consecutive_failure`/`log_suppressed`）；导出失败只写本地 warning，不阻塞 Agent Run
+- `process.cpu.time{cpu.mode}`、`process.uptime`：进程累计 CPU 时间与启动时长
+- `dsh.telemetry.export.*`：attempt/failure/skipped 累计量与 consecutive failure 当前值
+- `dsh.telemetry.degradation.*{reason}`：ELU 暂停/断路器的事件、累计时长和当前状态；恢复后补账
+- `dsh.telemetry.export{outcome}`：保留的兼容指标；新查询优先使用上述类型明确的 counter/gauge
 
 > ELU（`event_loop.utilization`）的定义、与 CPU% 的区别、判读分级、与延迟分位联读、现场Remediation Playbook 见 [docs/elu-event-loop-utilization.md](docs/elu-event-loop-utilization.md)。
 

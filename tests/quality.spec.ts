@@ -56,6 +56,30 @@ describe('telemetry quality counters', () => {
     expect(quality.consumeLogToken()).toBe(false)
     expect(quality.snapshot().logsSuppressed).toBe(2)
   })
+
+  it('accounts for degradation transitions, skipped batches, and active duration', () => {
+    let clock = 1_000
+    const quality = new TelemetryQuality(5, 60_000, () => clock)
+
+    quality.startDegradation('elu_pause')
+    quality.startDegradation('elu_pause') // idempotent
+    quality.recordExportSkipped('elu_pause')
+    quality.recordExportSkipped('elu_pause')
+    clock = 3_500
+
+    expect(quality.snapshot()).toMatchObject({
+      exportSkipped: { elu_pause: 2, circuit_open: 0 },
+      degradationEvents: { elu_pause: 1, circuit_open: 0 },
+      degradationDurationSeconds: { elu_pause: 2.5, circuit_open: 0 },
+      degradationActive: { elu_pause: true, circuit_open: false },
+    })
+
+    quality.endDegradation('elu_pause')
+    quality.endDegradation('elu_pause') // idempotent
+    clock = 5_000
+    expect(quality.snapshot().degradationDurationSeconds.elu_pause).toBe(2.5)
+    expect(quality.snapshot().degradationActive.elu_pause).toBe(false)
+  })
 })
 
 describe('counting metric exporter with resilience', () => {
@@ -114,6 +138,8 @@ describe('counting metric exporter with resilience', () => {
     exporter.export({} as never, () => {})
     expect(delegateCalls).toBe(0)
     expect(exporter.isPaused()).toBe(true)
+    expect(quality.snapshot().exportSkipped.elu_pause).toBe(1)
+    expect(quality.snapshot().degradationActive.elu_pause).toBe(true)
 
     exporter.setPaused(false)
     exporter.export({} as never, () => {})
@@ -160,6 +186,8 @@ describe('counting metric exporter with resilience', () => {
     expect(callbackCalled).toBe(true) // callback called with code 0 (skipped)
     // No additional attempt counted (delegate not called)
     expect(quality.snapshot().exportAttempts).toBe(3)
+    expect(quality.snapshot().exportSkipped.circuit_open).toBe(1)
+    expect(quality.snapshot().degradationActive.circuit_open).toBe(true)
   })
 
   it('allows a probe export after cooldown and closes circuit on success', () => {
@@ -203,6 +231,8 @@ describe('counting metric exporter with resilience', () => {
     exporter.export({} as never, () => {})
     expect(delegateCallCount).toBe(3) // probe went through
     expect(quality.snapshot().circuitOpen).toBe(false)
+    expect(quality.snapshot().degradationActive.circuit_open).toBe(false)
+    expect(quality.snapshot().degradationEvents.circuit_open).toBe(1)
     expect(warnMessages.some(m => m.includes('circuit breaker closed'))).toBe(true)
 
     vi.useRealTimers()

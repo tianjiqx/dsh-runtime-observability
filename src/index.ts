@@ -51,6 +51,8 @@ export class RuntimeObservability {
           'service.name': config.serviceName,
           'service.version': config.serviceVersion,
           'service.instance.id': config.serviceInstanceId,
+          'process.pid': process.pid,
+          'process.creation.time': new Date(Date.now() - process.uptime() * 1000).toISOString(),
         }),
         readers: [this.reader],
       })
@@ -109,8 +111,43 @@ export class RuntimeObservability {
     const activeResources = meter.createObservableGauge('dsh.runtime.active_resources', {
       description: 'Active Node.js resources by resource type.', unit: '{resource}',
     })
+    const processCpuTime = meter.createObservableCounter('process.cpu.time', {
+      description: 'Total CPU seconds consumed by the process.', unit: 's',
+    })
+    const processUptime = meter.createObservableGauge('process.uptime', {
+      description: 'Seconds since the process started.', unit: 's',
+    })
+    // Keep the original combined gauge for dashboard compatibility while
+    // exposing correctly typed counters and state gauges for new consumers.
     const exports = meter.createObservableGauge('dsh.telemetry.export', {
       description: 'Observability exporter quality counters.', unit: '{record}',
+    })
+    const exportAttempts = meter.createObservableCounter('dsh.telemetry.export.attempts', {
+      description: 'Metric export batches attempted.', unit: '{attempt}',
+    })
+    const exportFailures = meter.createObservableCounter('dsh.telemetry.export.failures', {
+      description: 'Metric export batches that failed.', unit: '{failure}',
+    })
+    const exportSkipped = meter.createObservableCounter('dsh.telemetry.export.skipped', {
+      description: 'Metric export batches intentionally skipped by degradation reason.', unit: '{batch}',
+    })
+    const logsSuppressed = meter.createObservableCounter('dsh.telemetry.logs.suppressed', {
+      description: 'Exporter failure log messages suppressed by throttling.', unit: '{log}',
+    })
+    const consecutiveFailures = meter.createObservableGauge('dsh.telemetry.export.consecutive_failures', {
+      description: 'Current consecutive metric export failure count.', unit: '{failure}',
+    })
+    const circuitOpen = meter.createObservableGauge('dsh.telemetry.circuit.open', {
+      description: 'Whether the metric export circuit breaker is open.', unit: '1',
+    })
+    const degradationEvents = meter.createObservableCounter('dsh.telemetry.degradation.events', {
+      description: 'Telemetry degradation state transitions.', unit: '{event}',
+    })
+    const degradationDuration = meter.createObservableCounter('dsh.telemetry.degradation.duration', {
+      description: 'Cumulative time spent in telemetry degradation.', unit: 's',
+    })
+    const degraded = meter.createObservableGauge('dsh.telemetry.degraded', {
+      description: 'Whether telemetry is currently degraded.', unit: '1',
     })
     meter.addBatchObservableCallback((result) => {
       const values = this.snapshot.collect()
@@ -124,16 +161,34 @@ export class RuntimeObservability {
       result.observe(memory, values.externalBytes, { area: 'external' })
       result.observe(memory, values.arrayBuffersBytes, { area: 'array_buffers' })
       for (const [type, count] of values.activeResources) result.observe(activeResources, count, { type })
+      result.observe(processCpuTime, values.processCpuUserSeconds, { 'cpu.mode': 'user' })
+      result.observe(processCpuTime, values.processCpuSystemSeconds, { 'cpu.mode': 'system' })
+      result.observe(processUptime, values.processUptimeSeconds)
+      // Evaluate transitions before taking the quality snapshot so the first
+      // post-recovery batch contains the complete pause ledger.
+      void this.profiling?.autoStopOnPressure(values.eventLoopUtilization)
+      this.handleEluDegradation(values.eventLoopUtilization, eluPauseThreshold)
       const quality = this.quality.snapshot()
       result.observe(exports, quality.exportAttempts, { outcome: 'attempt' })
       result.observe(exports, quality.exportFailures, { outcome: 'failure' })
       result.observe(exports, quality.consecutiveFailures, { outcome: 'consecutive_failure' })
       result.observe(exports, quality.logsSuppressed, { outcome: 'log_suppressed' })
-      // §3.1.8 降级：event loop 饱和时自动停止 profiling（fire-and-forget）。
-      void this.profiling?.autoStopOnPressure(values.eventLoopUtilization)
-      // ELU 降级联动：metric export 也暂停，避免恶性循环。
-      this.handleEluDegradation(values.eventLoopUtilization, eluPauseThreshold)
-    }, [runtime, utilization, memory, activeResources, exports])
+      result.observe(exportAttempts, quality.exportAttempts)
+      result.observe(exportFailures, quality.exportFailures)
+      result.observe(logsSuppressed, quality.logsSuppressed)
+      result.observe(consecutiveFailures, quality.consecutiveFailures)
+      result.observe(circuitOpen, quality.circuitOpen ? 1 : 0)
+      for (const reason of ['elu_pause', 'circuit_open'] as const) {
+        result.observe(exportSkipped, quality.exportSkipped[reason], { reason })
+        result.observe(degradationEvents, quality.degradationEvents[reason], { reason })
+        result.observe(degradationDuration, quality.degradationDurationSeconds[reason], { reason })
+        result.observe(degraded, quality.degradationActive[reason] ? 1 : 0, { reason })
+      }
+    }, [
+      runtime, utilization, memory, activeResources, processCpuTime, processUptime,
+      exports, exportAttempts, exportFailures, exportSkipped, logsSuppressed,
+      consecutiveFailures, circuitOpen, degradationEvents, degradationDuration, degraded,
+    ])
   }
 
   /**
