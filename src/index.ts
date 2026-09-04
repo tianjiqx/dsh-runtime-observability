@@ -7,6 +7,7 @@ import { RuntimeSnapshotCollector } from './runtime-snapshot.ts'
 import { TelemetryQuality } from './quality.ts'
 import { CountingMetricExporter } from './counting-exporter.ts'
 import { ProfilingController } from './profiling.ts'
+import { installWorkloadMetrics } from './workload-integration.ts'
 import {
   ACTIVE_WORKLOAD_KINDS,
   QUEUE_WORKLOAD_KINDS,
@@ -346,6 +347,7 @@ export function apply(ctx: Context, config: Config = {}): RuntimeObservability {
   // plugin fiber. Install once per overlapping HMR fiber; the tracker uses
   // Activation reference counts so overlap cannot double-count residency.
   if (normalized.enabled && normalized.endpoint) installSubagentLifecycleMetrics(ctx, state.service.subagents)
+  if (normalized.enabled && normalized.endpoint) installWorkloadMetrics(ctx, state.service.workload)
   return state.service
 }
 
