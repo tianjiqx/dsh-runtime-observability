@@ -1,6 +1,6 @@
 # dsh-runtime-observability
 
-[English](./README.md) | [中文](./docs/zh/)
+[English](../../README.md) | [中文](./)
 
 DSH 的运行时性能指标插件。它补足 CPU、内存、event loop、活跃资源和观测导出质量；不替换 `@loongsuite/dsh-plugin` 的业务 Trace。
 
@@ -20,21 +20,19 @@ DSH 的运行时性能指标插件。它补足 CPU、内存、event loop、活�
 - `dsh.subagent.lifecycle.events{event}`：Activation started/disposed/orphaned 的低基数累计账本
 - `dsh.telemetry.export{outcome}`：保留的兼容指标；新查询优先使用上述类型明确的 counter/gauge
 
-> ELU（`event_loop.utilization`）的定义、与 CPU% 的区别、判读分级、与延迟分位联读、现场Remediation Playbook 见 [docs/elu-event-loop-utilization.md](docs/elu-event-loop-utilization.md)。
+> ELU（`event_loop.utilization`）的定义、与 CPU% 的区别、判读分级、与延迟分位联读、处置 Playbook 见 [elu-event-loop-utilization.md](./elu-event-loop-utilization.md)。
 
 ## 指标判读文档
 
 | 文档 | 覆盖信号 | 核心内容 |
 |---|---|---|
-| [docs/elu-event-loop-utilization.md](docs/elu-event-loop-utilization.md) | `event_loop.utilization` | ELU 定义、与 CPU% 区别、饱和分级、插件自保联动、Remediation Playbook |
-| [docs/event-loop-delay.md](docs/event-loop-delay.md) | `event_loop.delay{quantile}` + `dsh_nodejs_eventloop_delay_*` | 延迟分位两实现视角、p99 判读线、与 GC/ELU 联动鉴别阻塞源 |
-| [docs/memory-gc.md](docs/memory-gc.md) | `memory{area}` + `dsh_v8js_memory_*`/`gc_*` | RSS/堆/space 分层、泄漏判型（堆内 vs 堆外）、GC 停顿与延迟代价 |
-| [docs/active-resources.md](docs/active-resources.md) | `active_resources{type}` | 句柄类型速查、泄漏判读（趋势+对账）、与 GC/内存交叉验证 |
-| [docs/workload-integration.md](docs/workload-integration.md) | `workload.*{kind}` | 显式生命周期接入 API、固定标签集合及当前宿主集成边界 |
-| [docs/subagent-lifecycle.md](docs/subagent-lifecycle.md) | `subagent.*` + ELU/active resources/heap/GC | continuable Activation 状态、orphan 判定与任务结束后衰减实验 |
-| [docs/telemetry-export-quality.md](docs/telemetry-export-quality.md) | `telemetry.export{outcome}` | 五态账本、故障Diagnosis Flow、断路器/节流语义、与巡检职责边界 |
-
-未设置 `endpoint` 时，插件仍可加载，但不会创建网络 exporter 或发送遥测。部署阶段以同名 Cordis patch 覆盖 endpoint；填写 Collector 基础地址后插件会自动补全 `/v1/metrics`。
+| [elu-event-loop-utilization.md](./elu-event-loop-utilization.md) | `event_loop.utilization` | ELU 定义、与 CPU% 区别、饱和分级、插件自保联动、处置 Playbook |
+| [event-loop-delay.md](./event-loop-delay.md) | `event_loop.delay{quantile}` + `dsh_nodejs_eventloop_delay_*` | 延迟分位两实现视角、p99 判读线、与 GC/ELU 联动鉴别阻塞源 |
+| [memory-gc.md](./memory-gc.md) | `memory{area}` + `dsh_v8js_memory_*`/`gc_*` | RSS/堆/space 分层、泄漏判型（堆内 vs 堆外）、GC 停顿与延迟代价 |
+| [active-resources.md](./active-resources.md) | `active_resources{type}` | 句柄类型速查、泄漏判读（趋势+对账）、与 GC/内存交叉验证 |
+| [workload-integration.md](./workload-integration.md) | `workload.*{kind}` | 显式生命周期接入 API、固定标签集合及当前宿主集成边界 |
+| [subagent-lifecycle.md](./subagent-lifecycle.md) | `subagent.*` + ELU/active resources/heap/GC | continuable Activation 状态、orphan 判定与任务结束后衰减实验 |
+| [telemetry-export-quality.md](./telemetry-export-quality.md) | `telemetry.export{outcome}` | 五态账本、故障判读流程、断路器/节流语义、与巡检职责边界 |
 
 ## 连续 Profiling（默认关闭）
 
