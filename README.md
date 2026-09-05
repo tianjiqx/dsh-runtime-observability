@@ -2,8 +2,6 @@
 
 DSH 的运行时性能指标插件。它补足 CPU、内存、event loop、活跃资源和观测导出质量；不替换 `@loongsuite/dsh-plugin` 的业务 Trace。
 
-已部署到 web profile（endpoint `http://localhost:4318`，profiling 已开启指向 `http://localhost:4040`）；部署与验证记录见工作区 `dsh-runtime-observability-progress-todo.md`。
-
 ## 提供的信号
 
 - `dsh.runtime.event_loop.delay{quantile}`（秒）与 `dsh.runtime.event_loop.utilization`
@@ -34,18 +32,18 @@ DSH 的运行时性能指标插件。它补足 CPU、内存、event loop、活�
 | [docs/subagent-lifecycle.md](docs/subagent-lifecycle.md) | `subagent.*` + ELU/active resources/heap/GC | continuable Activation 状态、orphan 判定与任务结束后衰减实验 |
 | [docs/telemetry-export-quality.md](docs/telemetry-export-quality.md) | `telemetry.export{outcome}` | 五态账本、故障Diagnosis Flow、断路器/节流语义、与巡检职责边界 |
 
-未设置 `endpoint` 时，插件仍可加载，但不会创建网络 exporter 或发送遥测。部署阶段以同名 Cordis patch 覆盖 endpoint；可填写 Collector 基础地址（例如 `http://localhost:4318`），插件会补全 `/v1/metrics`。
+未设置 `endpoint` 时，插件仍可加载，但不会创建网络 exporter 或发送遥测。部署阶段以同名 Cordis patch 覆盖 endpoint；填写 Collector 基础地址后插件会自动补全 `/v1/metrics`。
 
 ## 连续 Profiling（默认关闭）
 
-配置 `profiling.enabled: true` + `profiling.serverAddress`（Pyroscope 服务端，如 `http://localhost:4040`）后，插件经 `@pyroscope/nodejs` 上报 wall/heap profile：
+配置 `profiling.enabled: true` + `profiling.serverAddress`（Pyroscope 服务端地址）后，插件经 `@pyroscope/nodejs` 上报 wall/heap profile：
 
 - **关闭时不加载原生代码**（动态 import），生产路径零原生依赖
 - 启动延迟 `profiling.bootDelayMs`（默认 30s），不阻塞 DSH boot；旧字段 `sampleRateMs` 保留兼容但已废弃，采样频率由 Pyroscope SDK 控制
 - **fail-open**：SDK 加载失败/上传失败只写本地 warning；**event loop 利用率 ≥ `profiling.eluStopThreshold`（默认 0.9）自动停止采集**并记录原因
 - `appName` 缺省取 `serviceName`；`flushIntervalMs` 默认 60s
 
-查询：Grafana Explore → Pyroscope（数据源 `your-pyroscope:4040`），或 Pyroscope API `/querier.v1.QuerierService/*`。
+查询：Grafana Explore → Pyroscope 数据源，或 Pyroscope API `/querier.v1.QuerierService/*`。
 
 ## 导出韧性（Resilience）
 

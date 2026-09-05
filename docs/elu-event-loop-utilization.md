@@ -3,7 +3,7 @@
 > 适用范围：DSH 全部 Node.js 进程（dsh-agent / dsh-agent-web2 等）。
 > 指标来源：**本插件（dsh-runtime-observability）** 暴露 `dsh.runtime.event_loop.utilization` 等 `dsh.runtime.*` 信号；Companion metrics `dsh_nodejs_*`/`dsh_v8js_*` 来自社区包 `@opentelemetry/instrumentation-runtime-node`（本插件依赖引入）。
 > （Prometheus 实测）。
-> 关联文档：[README](../README.md)（插件配置项：ELU 自保阈值/导出韧性）· 工作区 `dsh-observability-dashboards-guide.md`（指标体系总览）· 工作区 `dsh-runtime-observability-progress-todo.md`（部署与验证记录）
+> 关联文档：[README](../README.md)（插件配置项：ELU 自保阈值/导出韧性）
 
 ---
 
@@ -115,7 +115,7 @@ web2 的判读链：
    - 大循环计算（无分片的批量处理）
 2. **卸载 CPU 密集活**：worker threads / 子进程，把主线程让出来
 3. **查 GC 压力**：对照 `dsh_v8js_gc_duration_seconds_*` 与 heap 趋势；heap 持续走高 + GC 变慢 ⇒ 排查内存泄漏或调堆
-4. **Pyroscope 火焰图定位函数**：Grafana → Explore → Pyroscope（数据源 `your-pyroscope:4040`）→ `service_name=<目标实例>` → Wall profile；哪个函数吃掉事件循环一目了然
+4. **Pyroscope 火焰图定位函数**：Grafana → Explore → Pyroscope 数据源 → `service_name=<目标实例>` → Wall profile；哪个函数吃掉事件循环一目了然
 5. **容量兜底**：确属业务量增长则拆分进程/实例（注意 web2 重启会杀在跑会话，需人工确认窗口）
 
 > 与诊断规则的衔接：TTFT p95 超基线时（R8），第二歩就是"对照 Runtime Diagnostics 的 ELU 排除 DSH 进程阻塞"——ELU 正常则慢在上游 Provider，ELU 饱和则慢在进程自身。
@@ -140,15 +140,15 @@ dsh_nodejs_eventloop_delay_p99_seconds
 rate(dsh_v8js_gc_duration_seconds_sum[5m])
 ```
 
-Grafana 入口：<http://localhost:3000/d/dsh-runtime-diagnostics>（Runtime Diagnostics 看板，Event Loop 行）。
+Grafana 查看：对应 Runtime Diagnostics 看板的 Event Loop 行。
 
 ## 10. 参考
 
 - Node.js 官方：`perf_hooks.performance.eventLoopUtilization()`（≥ 14.10）
 - OpenTelemetry `@opentelemetry/instrumentation-runtime-node`（`dsh_nodejs_*` 指标来源）
 - Google SRE《Site Reliability Engineering》§3 — Utilization / Saturation 分层（USE 方法）
-- 本插件源码与 [README](../README.md)（ELU 自保阈值、导出韧性配置）、`dsh-observability-master-plan.md` §9.1（指标速查，工作区根）
+- 本插件源码与 [README](../README.md)（ELU 自保阈值、导出韧性配置）
 
 ---
 
-*dsh-runtime-observability 插件文档 · *
+*dsh-runtime-observability 插件文档*

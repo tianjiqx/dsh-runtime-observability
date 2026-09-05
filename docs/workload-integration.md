@@ -25,7 +25,7 @@ runtime.workload.setRecoveryBacklog('ledger', pendingLedgers)
 
 ## 宿主集成状态
 
- 已定位 DSH 源码工作区 `dsh-core`，并确认 continuable subagent 提供稳定的公开 setup/event seam；因此 subagent 生命周期已由插件自动接入。通用 Agent Run、LLM、Tool、MCP queue/recovery facade 仍未接入宿主执行边界。
+已确认 continuable subagent 提供稳定的公开 setup/event seam，因此 subagent 生命周期已由插件自动接入。通用 Agent Run、LLM、Tool、MCP queue/recovery facade 仍未接入宿主执行边界。
 
 因此本阶段提交 facade 和 OTLP 指标注册，但不修改 profile 内依赖、不 monkey-patch 构建产物。取得宿主源码后，应分别在以下真实边界接入，并在宿主仓库独立提交：
 
