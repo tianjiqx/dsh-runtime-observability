@@ -1,79 +1,74 @@
-# DSH 内存与 GC 指标说明与Guide
+# Memory & GC
 
-> 指标来源：`dsh.runtime.memory{area}` 由**本插件**直接暴露；`dsh_v8js_memory_*` / `dsh_v8js_gc_*` 来自插件依赖的社区包 `@opentelemetry/instrumentation-runtime-node`。
-> （Prometheus 实测）。
-> Related：[event-loop-delay.md](./event-loop-delay.md)（GC 是 p99 长阻塞的头号嫌疑）· [README](../README.md)
+> Metrics source: `dsh.runtime.memory{area}` is exposed by **this plugin**; `dsh_v8js_memory_*` / `dsh_v8js_gc_*` come from the community package `@opentelemetry/instrumentation-runtime-node` (dependency).
+> Related: [Event Loop Delay](./event-loop-delay.md) (GC is the top suspect for p99 long pauses) · [README](../README.md)
 
 ---
 
-## 1. 两层视角
+## 1. Two-Layer Perspective
 
-| 层 | 指标 | Prometheus 名 | 回答的问题 |
+| Layer | Metric | Prometheus Name | Question Answered |
 |---|---|---|---|
-| 进程层 | `dsh.runtime.memory{area}` | `dsh_dsh_runtime_memory_bytes` | OS 视角：这个进程占了多少（RSS/堆/堆外） |
-| V8 层 | `dsh_v8js_memory_heap_space_size_bytes{v8js_heap_space_name}` | 同名 | 引擎视角：堆内部各 space 用量，**泄漏定位靠它** |
-| 压力层 | `dsh_v8js_memory_heap_space_available_size_bytes` | 同名 | 各 space 还剩多少可分配，**OOM 前兆信号** |
-| 代价层 | `dsh_v8js_gc_duration_seconds_*` | Histogram | GC 频率与停顿，**把内存问题换算成延迟代价** |
+| Process | `dsh.runtime.memory{area}` | `dsh_dsh_runtime_memory_bytes` | OS perspective: how much this process uses (RSS/heap/external) |
+| V8 | `dsh_v8js_memory_heap_space_size_bytes{v8js_heap_space_name}` | Same name | Engine perspective: per-space heap usage, **key for leak localization** |
+| Pressure | `dsh_v8js_memory_heap_space_available_size_bytes` | Same name | Available allocation per space, **OOM precursor signal** |
+| Cost | `dsh_v8js_gc_duration_seconds_*` | Histogram | GC frequency and pause, **converts memory issues to latency cost** |
 
-### area / space 字段速查
+### area / space Field Reference
 
-插件 `{area}`：`rss`（常驻内存，含堆外）、`heap_used` / `heap_total`（V8 堆）、`external`（Buffer 等堆外）、`array_buffers`。
+Plugin `{area}`: `rss` (resident memory, includes external), `heap_used` / `heap_total` (V8 heap), `external` (Buffer and other non-heap), `array_buffers`.
 
-V8 space 重点关注三个：`old_space`（老生代，**泄漏的主战场**，存活对象越积越多在这里）、`new_space`（新生代，Scavenge 高频回收）、`large_object_space`（大对象直入，>256KB 的 Buffer/大数组）。
+V8 spaces to focus on: `old_space` (old generation, **main battleground for leaks** — surviving objects accumulate here), `new_space` (young generation, frequent Scavenge collection), `large_object_space` (large objects >256KB Buffer/arrays go directly here).
 
 ## 2. Diagnosis Matrix
 
-| 信号 | 阈值参考 | 含义 |
+| Signal | Threshold Reference | Meaning |
 |---|---|---|
-| RSS 稳定 | 平稳波动 | 健康 |
-| RSS 阶梯式爬升不回落 | 连续数日单调升 | **泄漏或缓存无界**：对照 heap_used，同步涨 ⇒ 堆内泄漏；heap 平而 RSS 涨 ⇒ external/ArrayBuffers 泄漏（Buffer 未释放） |
-| heap_used 占 heap_total | 常态 > 90% | 堆吃紧，GC 压力升高 |
-| `old_space` available | 逼近 0 | OOM 前兆（社区包此指标是堆压力告警首选） |
-| GC major 频率 | 明显升高/时长变长 | 老生代回收频繁 ⇒ 泄漏或堆配置过小 |
-| GC p95 停顿 | > 50ms | 开始吃延迟预算；> 200ms 直接制造 event loop p99 尖刺 |
+| RSS stable | Smooth fluctuation | Healthy |
+| RSS step-increase without drop | Monotonic increase over days | **Leak or unbounded cache**: cross-check heap_used — synchronized growth = heap leak; heap flat but RSS growing = external/ArrayBuffer leak (Buffer not released) |
+| heap_used / heap_total | Sustained > 90% | Heap pressure, increased GC stress |
+| `old_space` available | Approaching 0 | OOM precursor (this community metric is the preferred heap pressure alert) |
+| GC major frequency | Noticeably increasing / longer duration | Frequent old-gen collection = leak or heap config too small |
+| GC p95 pause | > 50ms | Starting to consume latency budget; > 200ms directly creates event loop p99 spikes |
 
-## 3. Diagnosis Example（example snapshot）
+## 3. Diagnosis Example
 
-| 实例 | RSS | heap_used/total | old_space 用量 | GC（1h major 次数 / p95 停顿） | 判读 |
+| Instance | RSS | heap_used/total | old_space Usage | GC (1h major count / p95 pause) | Assessment |
 |---|---|---|---|---|---|
-| dsh-agent | 1.73GB | 608MB / 722MB | 544MB | ~720 / 19.3ms | heap 稳态、GC 高频但停顿小，健康 |
-| dsh-agent-web2 | 2.22GB | **1.51GB / 1.55GB（98%）** | 461MB，但 `large_object_space` 高达 **1.03GB** | 19 / 9.4ms | 🔴 两个风险点（见下） |
+| dsh-agent | 1.73GB | 608MB / 722MB | 544MB | ~720 / 19.3ms | Heap stable, GC frequent but pauses small, healthy |
+| dsh-agent-web2 | 2.22GB | **1.51GB / 1.55GB (98%)** | 461MB, but `large_object_space` at **1.03GB** | 19 / 9.4ms | 🔴 Two risk points (see below) |
 
-web2 两个关注点：
+web2 two concerns:
 
-1. **heap_used/total = 98%**：堆几乎吃满。GC 目前停顿尚小（p95 9.4ms），但老生代在 98% 占用下每次 major 都是贴着限额跑，heap_total 再被顶高就进入"分配即 GC"的死亡螺旋
-2. **large_object_space 1.03GB**：堆内近 2/3 是大对象（大 Buffer/大 JSON 字符串/大数组直入）。与 event loop p99 ≈3s 的时间相关性是关键线索——大对象的创建/序列化/拷贝既占堆又占主线程，**单一根因同时解释两个症状的概率高**（Pyroscope heap profile 可确认）
-
-对照记忆：昨日快照 web2 heap_used 985MB → 今日 1.51GB，**约 +50% 的单日涨幅**，需确认是会话量增长还是未释放的大对象累积。
+1. **heap_used/total = 98%**: Heap nearly full. GC pauses currently small (p95 9.4ms), but old-gen at 98% utilization means each major GC runs at the limit; further heap_total growth triggers "allocate-then-GC" death spiral
+2. **large_object_space 1.03GB**: Nearly 2/3 of heap is large objects (large Buffers/JSON strings/arrays going directly to large-object space). The correlation with event loop p99 ≈3s is a key clue — large object creation/serialization/copying occupies both heap and main thread, **high probability that a single root cause explains both symptoms** (Pyroscope heap profile can confirm)
 
 ## 4. Remediation Playbook
 
-1. **判型**：RSS 升 + heap_used 升 ⇒ 堆内问题；RSS 升 + heap 平 ⇒ 查 external/array_buffers（Buffer 未释放/原生模块）
-2. **定位**：Grafana → Pyroscope → `service_name=<实例>` → **Heap profile**（生产已开，无侵入）按 retained size 排序找持有者
-3. **短期缓解**：重启目标 profile 进程释放堆（**web2 是 GUI 宿主，重启会杀在跑会话，须人工确认窗口**）
-4. **根修**：大对象分片流式处理、明确的大缓存加 LRU 上限、检查全局数组只增不清
-5. **验证**：`old_space` 用量回落 + GC major 频率下降 + event loop p99 回落（三指标同向才确认修好）
+1. **Classify**: RSS ↑ + heap_used ↑ = heap issue; RSS ↑ + heap flat = check external/array_buffers (Buffer not released / native modules)
+2. **Locate**: Grafana → Pyroscope → `service_name=<instance>` → **Heap profile** (production-ready, non-invasive) sorted by retained size to find holders
+3. **Short-term mitigation**: Restart target process to release heap (**if GUI host, restarting kills active sessions — requires maintenance window**)
+4. **Root fix**: Large object chunked streaming, explicit caches with LRU limits, check global arrays for grow-only pattern
+5. **Verify**: `old_space` usage drops + GC major frequency drops + event loop p99 drops (all three must move in same direction to confirm fix)
 
-## 5. Common Queries（Prometheus，已实测）
+## 5. Common Queries
+
+Prometheus metric names may vary based on Collector transformation — verify with actual deployment.
 
 ```promql
-# 进程内存全景（MB）
+# Process memory overview (MB)
 dsh_dsh_runtime_memory_bytes / 1024 / 1024
 
-# 堆占用率（接近 1 即吃满，web2 当前 ~0.98）
+# Heap utilization ratio (approaching 1 = nearly full)
 dsh_v8js_memory_heap_used_bytes / dsh_v8js_memory_heap_total_bytes
 
-# old_space 泄漏趋势（6h 线性外推；斜率>0 且持续为泄漏信号）
+# old_space leak trend (6h linear extrapolation; slope > 0 sustained = leak signal)
 deriv(dsh_v8js_memory_heap_space_size_bytes{v8js_heap_space_name="old_space"}[6h])
 
-# GC 停顿 p95 与频率
+# GC pause p95 and frequency
 histogram_quantile(0.95, sum by (le, exported_job) (rate(dsh_v8js_gc_duration_seconds_bucket[1h])))
 sum by (exported_job, v8js_gc_type) (increase(dsh_v8js_gc_duration_seconds_count[1h]))
 
-# 堆外可疑增长（RSS 涨而堆不涨时的排查位）
+# External suspicious growth (check when RSS grows but heap doesn't)
 dsh_dsh_runtime_memory_bytes{area=~"external|array_buffers"} / 1024 / 1024
 ```
-
----
-
-*dsh-runtime-observability 插件文档 · *

@@ -68,5 +68,3 @@ pnpm run check
 # 在工作区根目录执行
 node scripts/runtime-observability-smoke.mjs
 ```
-
-完整的任务分解见 [implementation plan](docs/plans/2026-09-03-runtime-observability-implementation.md)。

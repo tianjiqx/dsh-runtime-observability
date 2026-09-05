@@ -1,67 +1,64 @@
-# DSH 活跃资源指标说明与Guide
+# Active Resources
 
-> 指标来源：**本插件**直接暴露 `dsh.runtime.active_resources{type}`（`src/index.ts:109`）。
-> （Prometheus 实测）。
-> Related：[elu-event-loop-utilization.md](./elu-event-loop-utilization.md) · [event-loop-delay.md](./event-loop-delay.md) · [README](../README.md)
+> Metrics source: **this plugin** exposes `dsh.runtime.active_resources{type}`.
+> Related: [ELU Guide](./elu-event-loop-utilization.md) · [Event Loop Delay](./event-loop-delay.md) · [README](../README.md)
 
 ---
 
 ## 1. Definition
 
-**活跃资源 = 此刻还挂在事件循环上的句柄/请求计数**，按 libuv 类型分列。事件循环"歇不下来"的直接原因就是还有活跃资源没释放——它是**连接/句柄泄漏的直接探测器**，也是进程"关不掉、退不出"的原因排查入口。
+**Active resources = handles/requests currently attached to the event loop**, categorized by libuv type. The direct reason an event loop "can't rest" is that active resources haven't been released — this is a **direct detector for connection/handle leaks** and the entry point for diagnosing why a process "won't shut down."
 
-采集自 `process.getActiveResourcesInfo()`（Node ≥ 17.3），插件最多列 32 种类型防基数爆炸。
+Collected from `process.getActiveResourcesInfo()` (Node ≥ 17.3); the plugin lists at most 32 types to prevent cardinality explosion.
 
-## 2. 常见 type 速查
+## 2. Common Types Reference
 
-| type | 对应资源 | 何时该关注 |
+| Type | Resource | When to Watch |
 |---|---|---|
-| `FSEventWrap` | 文件监听（fs.watch） | 数量随业务线性涨 ⇒ watcher 泄漏 |
-| `Timeout` | 未触发的定时器 | **持续 > 几百** ⇒ 定时器泄漏（clearInterval 缺失、轮询累积） |
-| `TCPSocketWrap` | 活跃 TCP 连接 | 稳态基线 ≈ 并发连接数；只涨不落 ⇒ 连接池/keep-alive 泄漏 |
-| `FSReqPromise` | 进行中的文件读写 | 短时尖峰正常（并发 I/O）；**常态高位** ⇒ 磁盘慢或 I/O 打爆 |
-| `TTYWrap` | 终端句柄（stdout/stderr） | 常规固定几个 |
-| `HTTPParser`/`Server` | HTTP 连接/监听服务 | 与请求并发对账 |
-| `Immediate` | setImmediate 队列 | 常态应有界；暴涨 ⇒ 分片逻辑失控 |
+| `FSEventWrap` | File watchers (fs.watch) | Count grows linearly with business → watcher leak |
+| `Timeout` | Unfired timers | **Sustained > hundreds** → timer leak (missing clearInterval, polling accumulation) |
+| `TCPSocketWrap` | Active TCP connections | Steady baseline ≈ concurrent connections; only grows → connection pool/keep-alive leak |
+| `FSReqPromise` | In-progress file I/O | Short spikes normal (concurrent I/O); **sustained high** → slow disk or I/O saturation |
+| `TTYWrap` | Terminal handles (stdout/stderr) | Normally fixed at a few |
+| `HTTPParser`/`Server` | HTTP connections/listening servers | Cross-check with request concurrency |
+| `Immediate` | setImmediate queue | Should be bounded; sudden growth → chunking logic失控 |
 
 ## 3. Diagnosis Principles
 
-1. **看趋势不看绝对值**：各服务基线不同（文件服务 FSEventWrap 天然多），关键是**阶跃后不回落**——正常资源随请求起伏，泄漏的资源只增不减
-2. **与请求量对账**：并发涨 ⇒ 资源涨是健康；并发平 ⇒ 资源涨是泄漏
-3. **与 GC 对照**：句柄泄漏同时会推高 external/array_buffers（[memory-gc.md](./memory-gc.md) §2）
-4. **类型集中在 1-2 种** ⇒ 针对性查那类 API 的释放路径；全面开花 ⇒ 上游请求堆积（回头看 ELU/延迟）
+1. **Watch trends, not absolute values**: Each service has different baselines (file services naturally have more FSEventWrap); the key is **no drop after step increase** — normal resources fluctuate with requests, leaked resources only increase
+2. **Cross-check with request volume**: Concurrency ↑ + resources ↑ = healthy; concurrency stable + resources ↑ = leak
+3. **Cross-reference with GC**: Handle leaks simultaneously push up external/array_buffers (see [memory-gc.md](./memory-gc.md) §2)
+4. **Concentrated in 1-2 types** → investigate that API's release path specifically; widespread → upstream request pileup (check ELU/latency)
 
-## 4. Diagnosis Example（example snapshot）
+## 4. Diagnosis Example
 
-| 实例 | top 资源 | 类型数 | 判读 |
+| Instance | Top Resources | Type Count | Assessment |
 |---|---|---|---|
-| dsh-agent | FSEventWrap 73 / Timeout 11 / FSReqPromise 8 / TCPSocketWrap 6 / TTYWrap 3 | 7 | ✅ 与昨日快照一致，稳态 |
-| dsh-agent-web2 | FSEventWrap 73 / Timeout 10 / TCPSocketWrap 8 | 11 | ✅ 基线平稳，无泄漏形态 |
+| dsh-agent | FSEventWrap 73 / Timeout 11 / FSReqPromise 8 / TCPSocketWrap 6 / TTYWrap 3 | 7 | ✅ Consistent with baseline, stable |
+| dsh-agent-web2 | FSEventWrap 73 / Timeout 10 / TCPSocketWrap 8 | 11 | ✅ Baseline stable, no leak pattern |
 
-两实例 FSEventWrap=73 高度一致属**预期**（同为 DSH 进程、监听同一套工作区文件树），不是异常。当前无资源泄漏迹象。
+Both instances having FSEventWrap=73 is **expected** (same DSH process, watching the same workspace file tree), not an anomaly. No resource leak indicators present.
 
 ## 5. Remediation Playbook
 
-1. 确认泄漏类型（§2 表）→ 定位对应 API 的创建/释放配对（watcher 有无 close、定时器有无 clear、连接有无 destroy）
-2. 快速二分：重启后资源回到基线、随后**线性回升** ⇒ 代码泄漏；回升后走平 ⇒ 基线本身变了（配置/会话量）
-3. 长期防线：给定时器/监听器/连接池加统一管理（退出路径统一清理），并用 `count_over_time` 趋势查询接告警
+1. Identify leak type (§2 table) → locate corresponding API create/release pairs (watcher close, timer clear, connection destroy)
+2. Quick bisection: resources return to baseline after restart, then **linearly increase** → code leak; increase then plateau → baseline itself changed (configuration/session volume)
+3. Long-term defense: add unified management for timers/listeners/connection pools (unified cleanup on exit), and use `count_over_time` trend queries for alerting
 
-## 6. Common Queries（Prometheus，已实测）
+## 6. Common Queries
+
+Prometheus metric names may vary based on Collector transformation — verify with actual deployment.
 
 ```promql
-# 当前活跃资源 top8
+# Current active resources top 8
 topk(8, dsh_dsh_runtime_active_resources)
 
-# 某类型 24h 趋势（泄漏 = 阶跃后不回落）
+# 24h trend for a specific type (leak = step increase without drop)
 dsh_dsh_runtime_active_resources{type="Timeout"}
 
-# 6h 线性斜率（>0 且持续 = 泄漏嫌疑）
+# 6h linear slope (>0 and sustained = leak suspect)
 deriv(dsh_dsh_runtime_active_resources{type="Timeout"}[6h])
 
-# 资源类型基数变化（新增类型 = 新依赖引入的信号）
+# Resource type cardinality change (new types = new dependency signal)
 count by (exported_job) (dsh_dsh_runtime_active_resources)
 ```
-
----
-
-*dsh-runtime-observability 插件文档 · *

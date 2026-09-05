@@ -1,154 +1,149 @@
-# DSH Event Loop 利用率（ELU）说明与Guide
+# Event Loop Utilization (ELU)
 
-> 适用范围：DSH 全部 Node.js 进程（dsh-agent / dsh-agent-web2 等）。
-> 指标来源：**本插件（dsh-runtime-observability）** 暴露 `dsh.runtime.event_loop.utilization` 等 `dsh.runtime.*` 信号；Companion metrics `dsh_nodejs_*`/`dsh_v8js_*` 来自社区包 `@opentelemetry/instrumentation-runtime-node`（本插件依赖引入）。
-> （Prometheus 实测）。
-> 关联文档：[README](../README.md)（插件配置项：ELU 自保阈值/导出韧性）
+> Scope: All DSH Node.js processes (dsh-agent, dsh-agent-web2, etc.)
+> Metrics source: **this plugin** exposes `dsh.runtime.event_loop.utilization` and other `dsh.runtime.*` signals; companion metrics `dsh_nodejs_*`/`dsh_v8js_*` come from the community package `@opentelemetry/instrumentation-runtime-node` (dependency).
+> Related: [README](../README.md) (plugin configuration: ELU self-protection thresholds / export resilience)
 
 ---
 
 ## 1. Definition
 
-**ELU（Event Loop Utilization）= 在一个观测窗口内，Node.js 事件循环处于"有活干"状态的时间占比**，取值 0~1。
+**ELU (Event Loop Utilization) = the proportion of time the Node.js event loop is "busy" within an observation window**, ranging 0~1.
 
-- `0.9` = 过去这个窗口里，90% 的时间这个线程都在干活，只有 10% 在歇着
-- `0` = 事件循环完全空闲
-- `1` = 窗口内全程无休，新事件只能排队
+- `0.9` = 90% of the time in this window, the thread was processing; only 10% idle
+- `0` = Event loop completely idle
+- `1` = No rest during the entire window; new events can only queue
 
-## 2. 背景：为什么需要这个指标
+## 2. Background: Why This Metric Matters
 
-Node.js 用**单线程**跑 JS：所有请求处理、回调、定时器排成队列，事件循环一轮一轮取出来执行。
+Node.js uses a **single thread** to run JS: all request handlers, callbacks, and timers queue up, and the event loop processes them one round at a time.
 
-- **干活时**（执行 JS 代码，含同步 I/O、序列化、计算）= 阻塞状态，其他所有请求排队等
-- **歇着时**（队列空了）= 等 I/O 完成、等下一个定时器
+- **Busy** (executing JS code, including synchronous I/O, serialization, computation) = blocked state, all other requests wait
+- **Idle** (queue empty) = waiting for I/O completion, waiting for next timer
 
-所以"事件循环有多忙"直接决定进程还能不能接新活——这正是 ELU 量测的东西。Node ≥ 14.10 提供 `performance.eventLoopUtilization()` 原生 API，插件基于它周期性计算并导出。
+Therefore, "how busy is the event loop" directly determines whether the process can accept new work — this is exactly what ELU measures. Node ≥ 14.10 provides the native `performance.eventLoopUtilization()` API; the plugin computes and exports it periodically.
 
-## 3. ELU vs CPU 使用率（最容易混的点）
+## 3. ELU vs CPU Usage (Most Commonly Confused)
 
 | | CPU % | ELU |
 |---|---|---|
-| 视角 | 整台机器（所有核） | 单个进程的 JS 线程 |
-| 度量的是 | 消费（用了多少算力） | **饱和度（唯一线程被占住的比例）** |
-| 16 核机器单线程跑满 | ≈ 6% | = 1.0 |
+| Perspective | Entire machine (all cores) | Single process's JS thread |
+| Measures | Consumption (how much compute used) | **Saturation (proportion the single thread is occupied)** |
+| Single thread maxed on 16-core machine | ≈ 6% | = 1.0 |
 
-**"ELU 0.9 但 CPU 只有百分之十几"完全可能**：JS 线程在同步计算上打转，其他 15 个核全部闲着。CPU% 看不出单线程瓶颈，ELU 才能看出。
+**"ELU 0.9 but CPU only ~10%" is completely possible**: JS thread is stuck in synchronous computation while the other 15 cores sit idle. CPU% can't reveal single-thread bottlenecks; only ELU can.
 
-## 4. DSH 里的指标链路
+## 4. Metric Pipeline in DSH
 
 ```
-dsh-runtime-observability 插件（dsh.runtime.event_loop.utilization，10s 采集）
-  → OTLP/HTTP → OTel Collector（namespace=dsh）
-  → Prometheus 指标名：dsh_dsh_runtime_event_loop_utilization_ratio（job=dsh_otel）
+dsh-runtime-observability plugin (dsh.runtime.event_loop.utilization, 10s collection)
+  → OTLP/HTTP → OTel Collector (namespace=dsh)
+  → Prometheus metric: dsh_dsh_runtime_event_loop_utilization_ratio
 ```
 
-配套的Companion metrics（同源插件）：
+Companion metrics (same source plugin):
 
-| Prometheus 指标名 | 含义 |
+| Prometheus Metric | Meaning |
 |---|---|
-| `dsh_dsh_runtime_event_loop_utilization_ratio` | ELU（本文主角） |
-| `dsh_dsh_runtime_event_loop_delay_seconds{quantile=...}` | 插件自测延迟分位 p50/p90/p99（秒） |
-| `dsh_nodejs_eventloop_utilization_ratio` | 社区包 @opentelemetry/instrumentation-runtime-node 的 ELU（交叉验证） |
-| `dsh_nodejs_eventloop_delay_p50/p90/p99_seconds` | 社区包延迟分位（交叉验证） |
+| `dsh_dsh_runtime_event_loop_utilization_ratio` | ELU (main metric) |
+| `dsh_dsh_runtime_event_loop_delay_seconds{quantile=...}` | Plugin's own delay percentiles p50/p90/p99 (seconds) |
+| `dsh_nodejs_eventloop_utilization_ratio` | Community package ELU (cross-validation) |
+| `dsh_nodejs_eventloop_delay_p50/p90/p99_seconds` | Community package delay percentiles (cross-validation) |
 
-插件 ELU 与社区包 ELU 数值接近属正常（算法同源、窗口略异）；两套同时看可以排除单实现偏差。
+Plugin ELU and community package ELU values are expected to be close (same algorithm, slightly different windows); viewing both can rule out single-implementation bias.
 
-## 5. 数值判读
+## 5. Value Interpretation
 
-### 5.1 经验分级
+### 5.1 Experience-Based Grading
 
-（OpenTelemetry runtime 语义 / Google SRE saturation 思路）
+(OpenTelemetry runtime semantics / Google SRE saturation methodology)
 
-| ELU | 分级 | 判读 |
+| ELU | Grade | Assessment |
 |---|---|---|
-| < 0.5 | 健康 | 正常余量 |
-| 0.5 ~ 0.7 | 偏高 | 开始关注趋势 |
-| 0.7 ~ 0.9 | 拥堵 | 延迟开始抬升 |
-| > 0.9 | 饱和 | 新请求排队，延迟有雪崩风险 |
+| < 0.5 | Healthy | Normal headroom |
+| 0.5 ~ 0.7 | Elevated | Start monitoring trend |
+| 0.7 ~ 0.9 | Congested | Latency begins rising |
+| > 0.9 | Saturated | New requests queue, latency avalanche risk |
 
-### 5.2 与延迟分位数联读（关键）
+### 5.2 Combined with Delay Percentiles (Critical)
 
-ELU 是 10s 窗口的**平均值**，延迟分位数显示**尖峰**，两者必须组合判读：
+ELU is a **window average** (10s); delay percentiles show **spikes** — both must be read together:
 
-| 组合 | 含义 |
+| Combination | Meaning |
 |---|---|
-| ELU 低 + p99 低 | 健康，无需动作 |
-| ELU 高 + p50 高 + p99 高 | 持续饱和，容量不足 |
-| ELU 高 + p50 正常 + p99 尖刺 | **周期性长阻塞**：平均很忙，间歇性有大活占住线程（大同步计算/GC/同步 I/O） |
-| ELU 低 + p99 尖刺 | 偶发阻塞（磁盘抖动/单次大对象操作），量少先观察 |
+| ELU low + p99 low | Healthy, no action needed |
+| ELU high + p50 high + p99 high | Sustained saturation, capacity insufficient |
+| ELU high + p50 normal + p99 spike | **Periodic long blocking**: busy on average, intermittent large tasks occupy the thread (large sync computation/GC/sync I/O) |
+| ELU low + p99 spike | Occasional blocking (disk jitter/single large object operation), low frequency — observe first |
 
-## 6. 插件的 ELU 联动自保机制
+## 6. Plugin ELU Self-Protection Mechanism
 
-`dsh-runtime-observability` 把 ELU 当作降级触发器（避免观测本身加剧饱和）：
+`dsh-runtime-observability` uses ELU as a degradation trigger (preventing observation itself from加剧 saturation):
 
-| 配置项 | 默认值 | 触发后行为 |
+| Config | Default | Behavior When Triggered |
 |---|---|---|
-| `profiling.eluStopThreshold` | 0.9 | 自动停止 Pyroscope profile 采集并记录原因 |
-| `resilience.eluPauseThreshold` | 0.95 | profiling **和** metric export 同时降级 |
+| `profiling.eluStopThreshold` | 0.9 | Automatically stops Pyroscope profile collection and logs reason |
+| `resilience.eluPauseThreshold` | 0.95 | Both profiling **and** metric export degrade simultaneously |
 
-原理：ELU 饱和时再做网络 I/O（导出、上传 profile）等于火上浇油；所有阈值可在 Cordis patch 配置中覆盖，设 0 禁用。
+Rationale: When ELU is saturated, doing network I/O (exporting, uploading profiles) only makes things worse; all thresholds can be overridden in Cordis patch config, set to 0 to disable.
 
-**运维含义**：看到 profiling 样本断流时，先查当时 ELU——可能是插件主动自保，不是 Pyroscope 故障（dsh-inspect-agent 的 `profiling-down` 剧本会区分这两种情况）。
+**Operations insight**: When profiling samples stop, first check ELU at that time — it may be the plugin's active self-protection, not a Pyroscope failure.
 
-## 7. Diagnosis Example（example snapshot）
+## 7. Diagnosis Example
 
-| 实例 | ELU | EL delay p50/p99 | RSS/heap_used | 判读 |
+| Instance | ELU | EL delay p50/p99 | RSS/heap_used | Assessment |
 |---|---|---|---|---|
-| dsh-agent | 0.44 ~ 0.52 | 20ms / 41ms | 1.73GB / 569MB | 健康区间 |
-| dsh-agent-web2 | **0.90 ~ 0.91** | 20ms / **2.87s** | 1.71GB / 985MB | **真实饱和**（见下） |
+| dsh-agent | 0.44 ~ 0.52 | 20ms / 41ms | 1.73GB / 569MB | Healthy range |
+| dsh-agent-web2 | **0.90 ~ 0.91** | 20ms / **2.87s** | 1.71GB / 985MB | **True saturation** (see below) |
 
-web2 的判读链：
+web2 diagnosis chain:
 
-1. ELU 0.90 已达 profiling 自停线，距 export 降级线（0.95）一步之遥
-2. p50 20ms 正常 + p99 2.87s 尖刺 + ELU 高 ⇒ 属"周期性长阻塞"形态（§5.2 第 3 行）：不是持续卡，是有大活间歇性占住线程
-3. heap_used 985MB 偏高，GC 停顿本身就是候选嫌疑之一
-4. web2 是协作 GUI（端口 3081）宿主，负载形态与多会话并发相关
+1. ELU 0.90 has reached the profiling auto-stop line, one step from the export degradation line (0.95)
+2. p50 20ms normal + p99 2.87s spike + ELU high = "periodic long blocking" pattern (§5.2 row 3): not continuous freeze, but intermittent large tasks occupying the thread
+3. heap_used 985MB elevated; GC pause itself is a candidate suspect
+4. web2 is a collaborative GUI host, load pattern correlates with multi-session concurrency
 
-## 8. ELU 高的Remediation Playbook
+## 8. High ELU Remediation Playbook
 
-按顺序执行：
+Execute in order:
 
-1. **找同步阻塞点**（最常见成因）
-   - 大对象 `JSON.parse/stringify`
-   - 同步 crypto（`pbkdf2Sync` 等）
-   - 同步 FS（`existsSync`/`readFileSync`/`writeFileSync`）
-   - 大循环计算（无分片的批量处理）
-2. **卸载 CPU 密集活**：worker threads / 子进程，把主线程让出来
-3. **查 GC 压力**：对照 `dsh_v8js_gc_duration_seconds_*` 与 heap 趋势；heap 持续走高 + GC 变慢 ⇒ 排查内存泄漏或调堆
-4. **Pyroscope 火焰图定位函数**：Grafana → Explore → Pyroscope 数据源 → `service_name=<目标实例>` → Wall profile；哪个函数吃掉事件循环一目了然
-5. **容量兜底**：确属业务量增长则拆分进程/实例（注意 web2 重启会杀在跑会话，需人工确认窗口）
+1. **Find synchronous blocking points** (most common cause)
+   - Large object `JSON.parse/stringify`
+   - Synchronous crypto (`pbkdf2Sync`, etc.)
+   - Synchronous FS (`existsSync`/`readFileSync`/`writeFileSync`)
+   - Large loop computation (un-chunked batch processing)
+2. **Offload CPU-intensive work**: worker threads / child processes, free the main thread
+3. **Check GC pressure**: cross-reference `dsh_v8js_gc_duration_seconds_*` with heap trend; heap continuously rising + GC slowing = investigate memory leak or adjust heap config
+4. **Pyroscope flame graph to locate functions**: Grafana → Explore → Pyroscope datasource → `service_name=<target instance>` → Wall profile; immediately see which function consumes the event loop
+5. **Capacity fallback**: If business volume genuinely grew, split processes/instances (note: restarting GUI host kills active sessions, requires maintenance window)
 
-> 与诊断规则的衔接：TTFT p95 超基线时（R8），第二歩就是"对照 Runtime Diagnostics 的 ELU 排除 DSH 进程阻塞"——ELU 正常则慢在上游 Provider，ELU 饱和则慢在进程自身。
+## 9. Common Queries
 
-## 9. Common Queries（Prometheus）
+Prometheus metric names may vary based on Collector transformation — verify with actual deployment.
 
 ```promql
-# 各实例当前 ELU
+# Current ELU per instance
 dsh_dsh_runtime_event_loop_utilization_ratio
 
-# 近 1 小时 ELU 均值（趋势）
+# Recent 1h ELU average (trend)
 avg_over_time(dsh_dsh_runtime_event_loop_utilization_ratio[1h])
 
-# ELU 饱和采样数（1h 内处于 >0.9 的样本个数；采样间隔 10s，满值 360）
+# ELU saturation sample count (samples > 0.9 in 1h; at 10s interval, max is 360)
 count_over_time((dsh_dsh_runtime_event_loop_utilization_ratio > 0.9)[1h:])
 
-# 配套延迟分位（与 ELU 同图叠加）
+# Companion delay percentiles (overlay with ELU on same chart)
 dsh_dsh_runtime_event_loop_delay_seconds{quantile="0.99"}
 dsh_nodejs_eventloop_delay_p99_seconds
 
-# GC 时长速率（排查 GC 嫌疑）
+# GC duration rate (investigate GC suspicion)
 rate(dsh_v8js_gc_duration_seconds_sum[5m])
 ```
 
-Grafana 查看：对应 Runtime Diagnostics 看板的 Event Loop 行。
+View in Grafana: Runtime Diagnostics dashboard, Event Loop row.
 
-## 10. 参考
+## 10. References
 
-- Node.js 官方：`perf_hooks.performance.eventLoopUtilization()`（≥ 14.10）
-- OpenTelemetry `@opentelemetry/instrumentation-runtime-node`（`dsh_nodejs_*` 指标来源）
-- Google SRE《Site Reliability Engineering》§3 — Utilization / Saturation 分层（USE 方法）
-- 本插件源码与 [README](../README.md)（ELU 自保阈值、导出韧性配置）
-
----
-
-*dsh-runtime-observability 插件文档*
+- Node.js official: `perf_hooks.performance.eventLoopUtilization()` (≥ 14.10)
+- OpenTelemetry `@opentelemetry/instrumentation-runtime-node` (source of `dsh_nodejs_*` metrics)
+- Google SRE "Site Reliability Engineering" §3 — Utilization / Saturation layered (USE method)
+- Plugin source and [README](../README.md) (ELU self-protection thresholds, export resilience configuration)
